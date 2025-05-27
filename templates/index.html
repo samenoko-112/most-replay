@@ -5,10 +5,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YouTubeリプレイシーン抽出ツール</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Noto+Sans+JP:wght@100..900&display=swap"
+        rel="stylesheet">
     <style>
         /* 全体的なスタイル */
         body {
-            font-family: 'Inter', sans-serif;
+            font-family: 'Inter','Noto Sans JP', sans-serif;
             /* Interフォントを使用 */
             margin: 20px;
             background-color: #f4f4f4;
@@ -252,8 +257,13 @@
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
     </style>
 </head>
@@ -275,7 +285,7 @@
         <div id="videoInfo" class="video-info" style="display: none;">
             <img id="thumbnail" src="" alt="動画サムネイル">
             <h2 id="videoTitle"></h2>
-            <p>最もリプレイされている可能性のあるシーン</p>
+            <p>リプレイ回数が多いシーン</p>
             <ul id="sceneList" class="scene-list"></ul>
         </div>
     </div>
