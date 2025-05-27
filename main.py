@@ -29,104 +29,113 @@ def analyze_video():
 
     try:
         # yt-dlpを実行して動画のJSONメタデータを取得します。
-        # '--dump-json': メタデータをJSON形式で標準出力に出力
-        # '--no-warnings': 不要な警告メッセージを抑制
-        # '--quiet': 進行状況の表示を抑制し、出力はJSONのみにする
         command = ['yt-dlp', '--dump-json', '--no-warnings', '--quiet', video_url]
-        
-        # サブプロセスとしてyt-dlpを実行し、その出力をキャプチャします。
-        # 'text=True': 出力をテキストとして扱う
-        # 'check=True': コマンドがエラーコードで終了した場合にCalledProcessErrorを発生させる
         result = subprocess.run(command, capture_output=True, text=True, check=True)
-        
-        # yt-dlpの標準出力をJSONとして解析します
         video_info = json.loads(result.stdout)
 
-        # 動画IDを取得します。これは埋め込みURLの生成に必要です。
         video_id = video_info.get('id')
         if not video_id:
-            # 動画IDが取得できない場合はエラーを返す
             return jsonify({"error": "動画IDを取得できませんでした。URLを確認してください。"}), 500
 
-        # ヒートマップデータを抽出します。
-        # ヒートマップデータは、動画のどの部分がどれだけ視聴されたかを示す値のリストです。
         heatmap_data = video_info.get('heatmap')
         if not heatmap_data:
-            # ヒートマップデータが見つからない場合はエラーを返す
             return jsonify({"error": "この動画にはヒートマップデータが見つかりませんでした。動画が短すぎるか、YouTubeの機能による制限の可能性があります。"}), 404
 
-        # ヒートマップデータからリプレイ回数が多いシーンを特定します。
-        # ここでは、'value'が最も高いセグメントと、その最大値の70%以上の'value'を持つセグメントを抽出します。
-        highlight_scenes = []
-        if heatmap_data:
-            # 全てのヒートマップセグメントから最大の'value'を取得
-            max_value = max(segment['value'] for segment in heatmap_data)
-            
-            # 閾値を設定: 最大値の70%を基準とします。
-            # max_valueが0の場合は無限ループを防ぐため、デフォルトの0.5を使用
-            threshold = max_value * 0.7 if max_value > 0 else 0.5 
-            
-            # ヒートマップデータを走査し、閾値を超えるセグメントを抽出
-            for segment in heatmap_data:
-                if segment['value'] >= threshold:
-                    highlight_scenes.append({
-                        'start_time': segment['start_time'],
-                        'end_time': segment['end_time'],
-                        'value': segment['value']
-                    })
+        # ここからヒートマップデータの解析とシーンの結合ロジック
         
-        # ここから追加・変更されたロジック:
-        # 抽出されたシーンを 'value' の降順でソートします。
+        # 1. 全てのヒートマップセグメントから最大の'value'を取得
+        max_value = max(segment['value'] for segment in heatmap_data)
+        
+        # 2. 閾値を設定: 最大値の70%を基準とします。
+        # max_valueが0の場合はデフォルト値を使用
+        threshold = max_value * 0.7 if max_value > 0 else 0.5 
+        
+        # 3. 閾値を超えるセグメントのみをフィルタリング
+        # ヒートマップデータはすでに時間順に並んでいると仮定します。
+        filtered_segments = [s for s in heatmap_data if s['value'] >= threshold]
+
+        merged_scenes = []
+        if filtered_segments:
+            # 最初のフィルタリングされたセグメントで現在のマージシーンを初期化
+            current_merged_scene = {
+                'start_time': filtered_segments[0]['start_time'],
+                'end_time': filtered_segments[0]['end_time'],
+                'total_value_duration': filtered_segments[0]['value'] * (filtered_segments[0]['end_time'] - filtered_segments[0]['start_time']),
+                'total_duration': filtered_segments[0]['end_time'] - filtered_segments[0]['start_time'],
+                'value': filtered_segments[0]['value'] # 初期値
+            }
+            
+            # フィルタリングされたセグメントを順に処理して連続するものを結合
+            for i in range(1, len(filtered_segments)):
+                prev_segment = filtered_segments[i-1]
+                current_segment = filtered_segments[i]
+
+                # 現在のセグメントが直前のセグメント（または結合中のシーン）と連続しているかチェック
+                # 浮動小数点数の比較なので、わずかな誤差を許容することも考えられますが、
+                # YouTubeのヒートマップは厳密な区切りになっていることが多いです。
+                if current_segment['start_time'] == current_merged_scene['end_time']:
+                    # 連続している場合、現在のマージシーンを延長し、valueを更新
+                    current_merged_scene['end_time'] = current_segment['end_time']
+                    segment_duration = current_segment['end_time'] - current_segment['start_time']
+                    current_merged_scene['total_value_duration'] += (current_segment['value'] * segment_duration)
+                    current_merged_scene['total_duration'] += segment_duration
+                    current_merged_scene['value'] = current_merged_scene['total_value_duration'] / current_merged_scene['total_duration']
+                else:
+                    # 連続していない場合、現在のマージシーンを確定してリストに追加
+                    merged_scenes.append(current_merged_scene)
+                    # 新しいマージシーンを現在のセグメントで初期化
+                    current_merged_scene = {
+                        'start_time': current_segment['start_time'],
+                        'end_time': current_segment['end_time'],
+                        'total_value_duration': current_segment['value'] * (current_segment['end_time'] - current_segment['start_time']),
+                        'total_duration': current_segment['end_time'] - current_segment['start_time'],
+                        'value': current_segment['value']
+                    }
+            
+            # 最後のマージシーンをリストに追加
+            merged_scenes.append(current_merged_scene)
+
+        # 結合されたシーンを 'value' の降順でソートします。
         # これにより、最もリプレイ回数が多い（と推定される）シーンがリストの先頭に来ます。
-        highlight_scenes.sort(key=lambda x: x['value'], reverse=True)
+        merged_scenes.sort(key=lambda x: x['value'], reverse=True)
 
         # 抽出されたシーンの情報を、フロントエンドで表示しやすい形式に変換し、
         # YouTubeの埋め込みURLを追加します。
         formatted_scenes = []
-        for scene in highlight_scenes:
-            # 開始時間と終了時間を秒単位の整数に変換
+        for scene in merged_scenes: # merged_scenesを使用
             start_sec_int = int(scene['start_time'])
             end_sec_int = int(scene['end_time'])
 
-            # 秒を分:秒形式に変換
             start_min = start_sec_int // 60
             start_sec = start_sec_int % 60
             end_min = end_sec_int // 60
             end_sec = end_sec_int % 60
 
-            # YouTubeの埋め込みURLを生成します。
-            # 'embed/' の後に動画ID、'?start=N&end=M&autoplay=1' で開始・終了時間と自動再生を指定
             embed_url = f"https://www.youtube.com/embed/{video_id}?start={start_sec_int}&end={end_sec_int}&autoplay=1"
 
             formatted_scenes.append({
-                'start_time_raw': scene['start_time'], # 生の開始時間（秒）
-                'end_time_raw': scene['end_time'],     # 生の終了時間（秒）
-                'start_time_formatted': f"{start_min:02d}:{start_sec:02d}", # フォーマット済み開始時間
-                'end_time_formatted': f"{end_min:02d}:{end_sec:02d}",     # フォーマット済み終了時間
-                'value': f"{scene['value']:.4f}", # 'value'を小数点以下4桁に整形
-                'embed_url': embed_url # 生成された埋め込みURL
+                'start_time_raw': scene['start_time'],
+                'end_time_raw': scene['end_time'],
+                'start_time_formatted': f"{start_min:02d}:{start_sec:02d}",
+                'end_time_formatted': f"{end_min:02d}:{end_sec:02d}",
+                'value': f"{scene['value']:.4f}",
+                'embed_url': embed_url
             })
 
-        # 解析結果をJSON形式でフロントエンドに返します
         return jsonify({
-            "video_title": video_info.get('title', '不明なタイトル'), # 動画タイトル
-            "thumbnail_url": video_info.get('thumbnail', ''),      # サムネイルURL
-            "scenes": formatted_scenes # 抽出されたハイライトシーンのリスト
+            "video_title": video_info.get('title', '不明なタイトル'),
+            "thumbnail_url": video_info.get('thumbnail', ''),
+            "scenes": formatted_scenes
         })
 
     except subprocess.CalledProcessError as e:
-        # yt-dlpの実行中にエラーが発生した場合
         app.logger.error(f"yt-dlp実行エラー: {e.stderr}")
         return jsonify({"error": f"動画の解析に失敗しました。URLを確認してください。エラー: {e.stderr.strip()}"}), 500
     except json.JSONDecodeError:
-        # yt-dlpの出力が有効なJSON形式でなかった場合
         return jsonify({"error": "yt-dlpの出力が不正なJSON形式でした。"}), 500
     except Exception as e:
-        # その他の予期せぬエラーが発生した場合
         app.logger.error(f"予期せぬエラー: {e}")
         return jsonify({"error": f"サーバーエラーが発生しました: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    # アプリケーションをデバッグモードで実行します。
-    # 本番環境では debug=False に設定してください。
-    app.run(host='0.0.0.0', debug=True)
+    app.run(debug=True)
